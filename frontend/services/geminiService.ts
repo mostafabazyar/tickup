@@ -2,11 +2,14 @@ import { GoogleGenAI, Type, GenerateContentResponse } from "@google/genai";
 // FIX: Added missing imports
 import { KRType, SuggestedKR, Objective, User, SuggestedPerspective, CompanyVision, KeyResult, SuggestedObjectiveWithKRs, MicroLearning, QuizQuestion, Task, FoundationSkill, Specialization, AISuggestedSkill, AITaskEstimation, AISuggestedRisk, AITalentSuggestion, RiskLevel, SuggestedApproach, SuggestedStrategy, FormFieldType } from '../types';
 
-if (!process.env.API_KEY) {
+// Check if API key is available
+const hasApiKey = !!process.env.API_KEY;
+if (!hasApiKey) {
   console.warn("API_KEY environment variable not set. AI features will be disabled.");
 }
 
-const ai = new GoogleGenAI({ apiKey: process.env.API_KEY! });
+// Initialize AI only if API key is available
+const ai = hasApiKey ? new GoogleGenAI({ apiKey: process.env.API_KEY! }) : null;
 
 // FIX: Added missing interface
 export interface SuggestedMission {
@@ -132,8 +135,9 @@ export const generateSmartObjectives = async (
     },
     promptTemplate: string
 ): Promise<SuggestedPerspective[]> => {
-    if (!process.env.API_KEY) {
-        console.error("Gemini API key is not configured.");
+    if (!ai) {
+        throw new Error("AI features are not available - API key not configured");
+    }
         return Promise.reject("API key not available.");
     }
     try {
@@ -208,9 +212,8 @@ export const suggestKeyResults = async (
   objectiveDescription: string,
   promptTemplate: string,
 ): Promise<SuggestedKR[]> => {
-    if (!process.env.API_KEY) {
-        console.error("Gemini API key is not configured.");
-        return Promise.reject("API key not available.");
+    if (!ai) {
+        throw new Error("AI features are not available - API key not configured");
     }
   try {
     const contents = promptTemplate
