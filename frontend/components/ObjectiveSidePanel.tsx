@@ -1,0 +1,657 @@
+import React, { useState, useEffect, useRef, useMemo } from 'react';
+// FIX: Added missing type imports
+import { Objective, User, KeyResult, Strategy, Index, Board, CheckIn, Comment, FeedbackTag, Project, Task, KRStatus, Document, ActivePage, ObjectiveCategoryId } from '../types';
+// FIX: Added missing icon import for DocumentTextIcon
+import { CloseIcon, UserIcon, Squares2x2Icon, ICONS, ArrowUpIcon, ArrowDownIcon, CheckCircleIcon, ExclamationTriangleIcon, XCircleIcon, FlagIcon, PlusIcon, DocumentTextIcon, ViewColumnsIcon, TrashIcon, ArrowsPointingOutIcon, ArrowsPointingInIcon, EditIcon, CheckIcon, ChevronRightIcon, ChevronLeftIcon, ThreeDotsIcon, SparklesIcon, RocketIcon, StarIcon } from './Icons';
+import ProgressBar from './ProgressBar';
+import ProgressChart from './ProgressChart';
+import { OBJECTIVE_CATEGORIES } from '../constants';
+import { calculateObjectiveProgress, calculateKrProgress } from '../utils/objectiveUtils';
+import UpdateKRModal from './UpdateKRModal';
+import { toPersianDate, dayDiff, isSameUTCDay } from '../utils/dateUtils';
+import { useClickOutside } from './ObjectiveSelectors';
+import { Banner } from './KrBanner';
+
+
+interface TargetProgressIndicatorProps {
+  kr: KeyResult;
+}
+
+const TargetProgressIndicator: React.FC<TargetProgressIndicatorProps> = ({ kr }) => {
+    const [page, setPage] = useState(0);
+
+    const isDailyMode = kr.reportFrequency === 'DAILY';
+    const { startDate, endDate, checkIns, reportFrequency, weeklyTargets, dailyTarget, startValue = 0 } = kr;
+
+    const start = startDate ? new Date(startDate) : new Date();
+    // Default end date: 12 weeks for weekly, 90 days for daily
+    const defaultEndDate = new Date(start);
+    if (isDailyMode) {
+        defaultEndDate.setDate(start.getDate() + 89);
+    } else {
+        defaultEndDate.setDate(start.getDate() + 12 * 7 - 1);
+    }
+    const end = endDate ? new Date(endDate) : defaultEndDate;
+
+    const totalDuration = isDailyMode 
+        ? dayDiff(end, start) + 1
+        : Math.ceil((dayDiff(end, start) + 1) / 7);
+
+    const itemsPerPage = isDailyMode ? 28 : 12; // 4 weeks of 7 days for daily, 3 rows of 4 for weekly
+    const totalPages = Math.ceil(totalDuration / itemsPerPage);
+
+    const startIndex = page * itemsPerPage;
+    const endIndex = Math.min(startIndex + itemsPerPage, totalDuration);
+
+    const sortedCheckIns = useMemo(() => (checkIns || []).slice().sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime()), [checkIns]);
+    const now = new Date();
+    
+    const squares = [];
+    for (let i = startIndex; i < endIndex; i++) {
+        let statusColor = 'bg-gray-200 dark:bg-slate-600'; // Future
+        let content: React.ReactNode = null;
+        let title = '';
+
+        const periodStartDate = new Date(start);
+        if (isDailyMode) {
+            periodStartDate.setUTCDate(start.getUTCDate() + i);
+        } else { // WEEKLY
+            periodStartDate.setUTCDate(start.getUTCDate() + i * 7);
+        }
+        
+        const persianDate = toPersianDate(periodStartDate.toISOString());
+
+        if (periodStartDate > now) {
+            title = `${isDailyMode ? 'روز' : 'هفته'} ${i + 1} (آینده)\n${persianDate}`;
+        } else {
+            const checkInsForPeriod = isDailyMode 
+                ? sortedCheckIns.filter(ci => isSameUTCDay(new Date(ci.date), periodStartDate))
+                : sortedCheckIns.filter(ci => {
+                    const ciDate = new Date(ci.date);
+                    const weekEndDate = new Date(periodStartDate);
+                    weekEndDate.setUTCDate(weekEndDate.getUTCDate() + 6);
+                    weekEndDate.setUTCHours(23, 59, 59, 999);
+                    return ciDate >= periodStartDate && ciDate <= weekEndDate;
+                });
+            
+            const target = isDailyMode ? (dailyTarget?.target || 0) : (weeklyTargets?.[i] ?? 0);
+            
+            if (checkInsForPeriod.length === 0) {
+                statusColor = 'bg-gray-300 dark:bg-slate-500';
+                title = `${isDailyMode ? 'روز' : 'هفته'} ${i + 1} (بدون گزارش)\n${persianDate}\nتارگت: ${target?.toFixed(1) ?? 'N/A'}`;
+            } else if (target === 0) {
+                statusColor = 'bg-gray-100 dark:bg-slate-700';
+                content = <div className="w-2 h-2 bg-blue-400 rounded-full" title="بدون تارگت"></div>;
+                title = `${isDailyMode ? 'روز' : 'هفته'} ${i + 1} (بدون تارگت)\n${persianDate}`;
+            } else {
+                 const lastCheckInThisPeriod = checkInsForPeriod[checkInsForPeriod.length - 1];
+                 const lastCheckInBeforeThisPeriod = sortedCheckIns.slice().reverse().find(ci => new Date(ci.date) < periodStartDate);
+                 const cumulativeAtStart = lastCheckInBeforeThisPeriod ? lastCheckInBeforeThisPeriod.value : startValue;
+                 const cumulativeAtEnd = lastCheckInThisPeriod.value;
+                 const actualProgress = Math.abs(cumulativeAtEnd - cumulativeAtStart);
+
+                 title = `${isDailyMode ? 'روز' : 'هفته'} ${i + 1}\n${persianDate}\nپیشرفت: ${actualProgress.toFixed(1)}\nتارگت: ${target.toFixed(1)}`;
+                 
+                 let status: 'met' | 'exceeded' | 'below' = 'below';
+                 const epsilon = 0.01;
+                 const progressRatio = (target > 0) ? (actualProgress / target) : 0;
+                 
+                 if (progressRatio > 1 + epsilon) {
+                    status = 'exceeded';
+                 } else if (progressRatio >= 1 - epsilon) {
+                    status = 'met';
+                 }
+                
+                statusColor = 'bg-gray-100 dark:bg-slate-700';
+
+                 switch (status) {
+                    case 'met':
+                        content = <CheckIcon className="w-3 h-3 text-green-500" />;
+                        break;
+                    case 'exceeded':
+                        content = <div className="w-3 h-3 rounded-full bg-black flex items-center justify-center"><CheckIcon className="w-2 h-2 text-green-400" /></div>;
+                        break;
+                    case 'below':
+                        content = <ExclamationTriangleIcon className="w-3 h-3 text-orange-500" />;
+                        break;
+                 }
+            }
+        }
+        squares.push(<div key={i} title={title} className={`w-4 h-4 rounded-sm flex items-center justify-center ${statusColor}`}>{content}</div>);
+    }
+
+    return (
+        <div className="flex items-center space-x-2 space-x-reverse">
+            {totalPages > 1 && (
+                <button onClick={() => setPage(p => p - 1)} disabled={page === 0} className="p-1 rounded-full hover:bg-gray-200 dark:hover:bg-slate-600 disabled:opacity-30">
+                    <ChevronRightIcon className="w-4 h-4" />
+                </button>
+            )}
+            <div className={`grid ${isDailyMode ? 'grid-cols-7' : 'grid-cols-4'} gap-1 w-fit`}>
+                {squares}
+            </div>
+            {totalPages > 1 && (
+                 <button onClick={() => setPage(p => p + 1)} disabled={page >= totalPages - 1} className="p-1 rounded-full hover:bg-gray-200 dark:hover:bg-slate-600 disabled:opacity-30">
+                    <ChevronLeftIcon className="w-4 h-4" />
+                </button>
+            )}
+        </div>
+    );
+};
+
+
+interface KeyResultDetailTabProps {
+    kr: KeyResult;
+    objectiveId: string;
+    onCheckin: (objectiveId: string, krId: string, value: number, rating: number, report: { tasksDone: string; tasksNext: string; challenges: string; }, challengeDifficulty: number, challengeTagIds: string[], status: KRStatus) => void;
+    onAddComment: (objectiveId: string, krId: string, text: string) => void;
+    challengeTags: FeedbackTag[];
+    objectives: Objective[];
+    projects: Project[];
+    tasks: Task[];
+    users: User[];
+    currentUser: User;
+    onSelectTask: (taskId: string) => void;
+    onUpdateKeyResultDetails: (objectiveId: string, krId: string, updates: Partial<KeyResult>) => void;
+    boards: Board[];
+    documents: Document[];
+    onOpenDocument: (docId: string, options?: { readOnly: boolean }) => void;
+    onNavigateToBoardFromKR: (boardId: string, objectiveId: string, krId: string) => void;
+    onEditKeyResult: (krId: string) => void;
+    onOpenProgramDesigner: (objectiveId: string, krId: string) => void;
+}
+
+const KeyResultDetailTab: React.FC<KeyResultDetailTabProps> = ({ kr, objectiveId, onCheckin, onAddComment, challengeTags, objectives, projects, tasks, users, currentUser, onSelectTask, onUpdateKeyResultDetails, boards, documents, onOpenDocument, onNavigateToBoardFromKR, onEditKeyResult, onOpenProgramDesigner }) => {
+    const [isUpdateModalOpen, setIsUpdateModalOpen] = useState(false);
+    const [isBoardSelectorOpen, setIsBoardSelectorOpen] = useState(false);
+    const boardButtonRef = useRef<HTMLButtonElement>(null);
+    const boardPopoverRef = useRef<HTMLDivElement>(null);
+    const [isDocSelectorOpen, setIsDocSelectorOpen] = useState(false);
+    const docButtonRef = useRef<HTMLButtonElement>(null);
+    const docPopoverRef = useRef<HTMLDivElement>(null);
+    const [isKrMenuOpen, setIsKrMenuOpen] = useState(false);
+    const krMenuButtonRef = useRef<HTMLButtonElement>(null);
+    const krMenuRef = useRef<HTMLDivElement>(null);
+
+    useClickOutside(boardPopoverRef, () => setIsBoardSelectorOpen(false), boardButtonRef);
+    useClickOutside(docPopoverRef, () => setIsDocSelectorOpen(false), docButtonRef);
+    useClickOutside(krMenuRef, () => setIsKrMenuOpen(false), krMenuButtonRef);
+    const progress = calculateKrProgress(kr);
+
+    const canCheckIn = useMemo(() => {
+        if (!kr.reportFrequency || kr.reportFrequency === 'DAILY') {
+            const lastCheckInDate = kr.checkIns && kr.checkIns.length > 0
+                ? new Date(kr.checkIns[kr.checkIns.length - 1].date)
+                : null;
+            if (lastCheckInDate) {
+                const today = new Date();
+                if (lastCheckInDate.getFullYear() === today.getFullYear() &&
+                    lastCheckInDate.getMonth() === today.getMonth() &&
+                    lastCheckInDate.getDate() === today.getDate()) {
+                    return false; // Already checked in today
+                }
+            }
+            return true;
+        }
+        if (kr.reportFrequency === 'WEEKLY') {
+            const todayDay = new Date().getDay(); // Sunday is 0, Thursday is 4, Friday is 5
+            return todayDay === 4 || todayDay === 5;
+        }
+        return true;
+    }, [kr.checkIns, kr.reportFrequency]);
+
+    const checkInDisabledTooltip = useMemo(() => {
+        if (canCheckIn) return 'ثبت پیشرفت جدید';
+        if (kr.reportFrequency === 'WEEKLY') {
+            return 'گزارش هفتگی فقط در روزهای پنج‌شنبه و جمعه امکان‌پذیر است';
+        }
+        if (kr.reportFrequency === 'DAILY') {
+            return 'شما امروز قبلاً گزارش ثبت کرده‌اید';
+        }
+        return '';
+    }, [canCheckIn, kr.reportFrequency]);
+
+    const STATUSES: { id: KRStatus; label: string; color: 'green' | 'yellow' | 'red' | 'orange'; Icon: React.FC<any> }[] = [
+        { id: 'ON_TRACK', label: 'در مسیر', color: 'green', Icon: CheckCircleIcon },
+        { id: 'NEEDS_ATTENTION', label: 'نیاز به توجه', color: 'yellow', Icon: ExclamationTriangleIcon },
+        { id: 'OFF_TRACK', label: 'خارج از مسیر', color: 'orange', Icon: XCircleIcon },
+        { id: 'CHALLENGE', label: 'توقف OKR', color: 'red', Icon: FlagIcon }
+    ];
+
+    if (!kr) return null;
+
+    const handleSubmitCheckin = (krId: string, value: number, rating: number, report: { tasksDone: string; tasksNext: string; challenges: string; }, challengeDifficulty: number, challengeTagIds: string[], status: KRStatus) => {
+        onCheckin(objectiveId, krId, value, rating, report, challengeDifficulty, challengeTagIds, status);
+    };
+
+    const linkedBoard = kr.linkedBoardId ? boards.find(b => b.id === kr.linkedBoardId) : null;
+    const linkedDocuments = (kr.linkedDocumentIds || []).map(id => documents.find(d => d.id === id)).filter((d): d is Document => !!d);
+
+    const projectIdsForObjective = useMemo(() => 
+        projects.filter(p => p.objectiveId === objectiveId).map(p => p.id)
+    , [projects, objectiveId]);
+    
+    const availableBoards = useMemo(() => 
+        boards.filter(b => projectIdsForObjective.includes(b.projectId as string))
+    , [boards, projectIdsForObjective]);
+
+    const handleBoardClick = (boardId: string) => {
+        onNavigateToBoardFromKR(boardId, objectiveId, kr.id);
+    };
+
+    const handleToggleDocument = (docId: string) => {
+        const currentIds = kr.linkedDocumentIds || [];
+        const newIds = currentIds.includes(docId) ? currentIds.filter(id => id !== docId) : [...currentIds, docId];
+        onUpdateKeyResultDetails(objectiveId, kr.id, { linkedDocumentIds: newIds });
+    };
+    
+    const handleImageUpload = (dataUrl: string) => {
+        onUpdateKeyResultDetails(objectiveId, kr.id, { bannerImageUrl: dataUrl });
+    };
+
+    const handleRemoveImage = () => {
+        onUpdateKeyResultDetails(objectiveId, kr.id, { bannerImageUrl: undefined });
+    };
+
+
+    return (
+        <div className="space-y-6 animate-fade-in">
+            <div className="-mx-6 -mt-6 mb-6">
+                <Banner
+                    imageUrl={kr.bannerImageUrl}
+                    isEditable={true}
+                    onImageUpload={handleImageUpload}
+                    onRemoveImage={handleRemoveImage}
+                    altText={`Banner for ${kr.title}`}
+                />
+            </div>
+            <div className="group relative flex justify-between items-start">
+                <div>
+                    <h3 className="text-2xl font-bold text-brand-text">{kr.title}</h3>
+                    <p className="mt-2 text-brand-subtext">جزئیات و پیشرفت این نتیجه کلیدی.</p>
+                </div>
+                 <div className="relative">
+                    <button
+                        ref={krMenuButtonRef}
+                        onClick={() => setIsKrMenuOpen(p => !p)}
+                        className="p-2 rounded-full text-gray-400 hover:bg-gray-200/80 hover:text-blue-600"
+                        title="گزینه‌ها"
+                    >
+                        <ThreeDotsIcon className="w-5 h-5" />
+                    </button>
+                    {isKrMenuOpen && (
+                        <div ref={krMenuRef} className="absolute top-full left-0 mt-2 w-56 bg-white rounded-md shadow-lg border z-10 py-1">
+                            <button onClick={() => { onEditKeyResult(kr.id); setIsKrMenuOpen(false); }} className="w-full text-right flex items-center px-4 py-2 text-sm text-gray-700 hover:bg-gray-100">
+                                <EditIcon className="w-4 h-4 ml-2" />
+                                ویرایش نتیجه کلیدی
+                            </button>
+                            <button onClick={() => { onOpenProgramDesigner(objectiveId, kr.id); setIsKrMenuOpen(false); }} className="w-full text-right flex items-center px-4 py-2 text-sm text-gray-700 hover:bg-gray-100">
+                                <SparklesIcon className="w-4 h-4 ml-2 text-purple-500" />
+                                پیشنهاد فرضیه
+                            </button>
+                        </div>
+                    )}
+                </div>
+            </div>
+
+            <div className="flex items-center space-x-4 space-x-reverse py-4">
+                <div className="flex-grow">
+                    <ProgressBar progress={progress} colorClass="bg-blue-500" showPercentage={true} heightClass="h-5" />
+                </div>
+                <TargetProgressIndicator kr={kr} />
+            </div>
+            
+            <div className="border-t pt-4">
+                <div className="flex items-center justify-center space-x-2 space-x-reverse">
+                    {STATUSES.map(statusInfo => {
+                        const isActive = kr.status === statusInfo.id;
+                        const colors = {
+                            green: { active: 'bg-green-100 text-green-700 dark:bg-green-900/50 dark:text-green-300' },
+                            yellow: { active: 'bg-yellow-100 text-yellow-700 dark:bg-yellow-900/50 dark:text-yellow-300' },
+                            red: { active: 'bg-red-100 text-red-700 dark:bg-red-900/50 dark:text-red-300' },
+                            orange: { active: 'bg-orange-100 text-orange-700 dark:bg-orange-900/50 dark:text-orange-300' }
+                        };
+                        const activeClasses = colors[statusInfo.color].active;
+                        const inactiveClasses = 'bg-gray-100 dark:bg-slate-700 text-gray-400 dark:text-slate-500 opacity-70';
+
+                        return (
+                            <div
+                                key={statusInfo.id}
+                                className={`flex items-center px-3 py-1.5 rounded-full text-sm font-medium transition-colors cursor-default ${isActive ? activeClasses : inactiveClasses}`}
+                                title={isActive ? `وضعیت فعلی: ${statusInfo.label}` : statusInfo.label}
+                            >
+                                <statusInfo.Icon className="w-5 h-5 ml-2" />
+                                <span>{statusInfo.label}</span>
+                            </div>
+                        )
+                    })}
+                </div>
+            </div>
+
+
+            <div className="border-t pt-6">
+                <button
+                    onClick={() => setIsUpdateModalOpen(true)}
+                    disabled={!canCheckIn}
+                    className="w-full px-4 py-2 bg-brand-primary text-white font-semibold rounded-lg shadow-sm hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed"
+                    title={checkInDisabledTooltip}
+                >
+                    ثبت پیشرفت (Check-in)
+                </button>
+            </div>
+            
+            <div className="border-t pt-6">
+                <h4 className="text-lg font-semibold text-brand-text mb-4">برنامه</h4>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    {/* Board section */}
+                    <div className="relative group">
+                        <button 
+                            ref={boardButtonRef}
+                            onClick={() => {
+                                if (linkedBoard) {
+                                    handleBoardClick(linkedBoard.id);
+                                } else {
+                                    setIsBoardSelectorOpen(true);
+                                }
+                            }} 
+                            className={`flex items-center w-full p-4 rounded-lg transition-colors ${
+                                linkedBoard 
+                                ? 'bg-gray-100/70 text-gray-800 hover:bg-gray-200/70'
+                                : 'bg-gray-100/50 border-2 border-dashed hover:border-blue-400 text-gray-500 hover:text-blue-500'
+                            }`}
+                        >
+                            {linkedBoard ? (
+                                <>
+                                    <ViewColumnsIcon className="w-5 h-5 ml-2" />
+                                    <span className="text-sm font-medium truncate">{linkedBoard.name}</span>
+                                </>
+                            ) : (
+                                <>
+                                    <PlusIcon className="w-5 h-5 ml-2" />
+                                    <span className="text-sm font-medium">افزودن برد</span>
+                                </>
+                            )}
+                        </button>
+                        {linkedBoard && (
+                            <button 
+                                onClick={(e) => { e.stopPropagation(); onUpdateKeyResultDetails(objectiveId, kr.id, { linkedBoardId: undefined }); }} 
+                                className="absolute top-1/2 -translate-y-1/2 left-2 p-1 rounded-full text-gray-400 hover:text-red-500 hover:bg-red-100/50 opacity-0 group-hover:opacity-100 transition-opacity"
+                                title="حذف برد"
+                            >
+                                <TrashIcon className="w-4 h-4" />
+                            </button>
+                        )}
+                        {isBoardSelectorOpen && (
+                            <div ref={boardPopoverRef} className="absolute top-full mt-1 w-full bg-white rounded-md shadow-lg border z-10 max-h-48 overflow-y-auto">
+                                {availableBoards.length > 0 ? availableBoards.map(board => (
+                                    <button key={board.id} onClick={() => { onUpdateKeyResultDetails(objectiveId, kr.id, { linkedBoardId: board.id }); setIsBoardSelectorOpen(false); }} className="w-full text-right p-2 text-sm hover:bg-gray-100">{board.name}</button>
+                                )) : <p className="p-2 text-xs text-center text-gray-500">هیچ برد مرتبطی در پروژه این هدف یافت نشد.</p>}
+                            </div>
+                        )}
+                    </div>
+
+                    {/* Document section */}
+                    <div className="relative group">
+                        <button 
+                            ref={docButtonRef}
+                            onClick={() => {
+                                if (linkedDocuments.length === 1) {
+                                    onOpenDocument(linkedDocuments[0].id, { readOnly: true });
+                                } else {
+                                    setIsDocSelectorOpen(true);
+                                }
+                            }} 
+                            className={`flex items-center w-full p-4 rounded-lg transition-colors ${
+                                linkedDocuments.length > 0
+                                ? 'bg-gray-100/70 text-gray-800 hover:bg-gray-200/70'
+                                : 'bg-gray-100/50 border-2 border-dashed hover:border-blue-400 text-gray-500 hover:text-blue-500'
+                            }`}
+                        >
+                            {linkedDocuments.length > 0 ? (
+                                <>
+                                    <DocumentTextIcon className="w-5 h-5 ml-2" />
+                                    <span className="text-sm font-medium truncate">{linkedDocuments.length === 1 ? linkedDocuments[0].title : `${linkedDocuments.length} دستورالعمل`}</span>
+                                </>
+                            ) : (
+                                <>
+                                    <PlusIcon className="w-5 h-5 ml-2" />
+                                    <span className="text-sm font-medium">افزودن دستورالعمل</span>
+                                </>
+                            )}
+                        </button>
+                        {isDocSelectorOpen && (
+                            <div ref={docPopoverRef} className="absolute top-full mt-1 w-full bg-white rounded-md shadow-lg border z-10 max-h-48 overflow-y-auto">
+                                <div className="p-2 border-b">
+                                    {documents.map(doc => (
+                                        <label key={doc.id} className="flex items-center p-1.5 rounded hover:bg-gray-100 cursor-pointer">
+                                            <input type="checkbox" checked={(kr.linkedDocumentIds || []).includes(doc.id)} onChange={() => handleToggleDocument(doc.id)} className="ml-2"/>
+                                            <span className="text-sm">{doc.title}</span>
+                                        </label>
+                                    ))}
+                                </div>
+                                <button className="w-full text-center p-2 text-sm text-blue-600 font-semibold">ایجاد دستورالعمل جدید</button>
+                            </div>
+                        )}
+                    </div>
+                </div>
+            </div>
+            
+            {kr.checkIns && kr.checkIns.length > 0 && (
+                <div className="border-t pt-6">
+                    <h4 className="text-lg font-semibold text-brand-text mb-4">تاریخچه Check-in</h4>
+                    <div className="space-y-4 max-h-60 overflow-y-auto">
+                        {kr.checkIns.map(ci => (
+                            <div key={ci.id} className="p-3 bg-gray-50/70 rounded-md border text-sm">
+                                <p><strong>تاریخ:</strong> {toPersianDate(ci.date)} - <strong>مقدار:</strong> {ci.value} - <strong>امتیاز:</strong> {ci.rating}/5</p>
+                                {typeof ci.report === 'string' ? <p className="mt-2 whitespace-pre-wrap">{ci.report}</p> : (
+                                    <div className="mt-2 text-xs space-y-1">
+                                        <p><strong>انجام شده:</strong> {ci.report.tasksDone}</p>
+                                        <p><strong>برنامه بعدی:</strong> {ci.report.tasksNext}</p>
+                                        <p><strong>چالش‌ها:</strong> {ci.report.challenges}</p>
+                                    </div>
+                                )}
+                            </div>
+                        ))}
+                    </div>
+                </div>
+            )}
+            
+            <UpdateKRModal
+                isOpen={isUpdateModalOpen}
+                onClose={() => setIsUpdateModalOpen(false)}
+                kr={kr}
+                onSubmit={handleSubmitCheckin}
+                challengeTags={challengeTags}
+                objectives={objectives}
+            />
+        </div>
+    );
+};
+
+const TabButton: React.FC<{ label: string; isActive: boolean; onClick: () => void }> = ({ label, isActive, onClick }) => {
+    return (
+        <button
+            onClick={onClick}
+            className={`whitespace-nowrap py-3 px-3 border-b-2 font-medium text-sm truncate max-w-36 ${
+                isActive
+                    ? 'border-brand-primary text-brand-primary'
+                    : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+            }`}
+            title={label}
+        >
+            {label}
+        </button>
+    );
+}
+
+interface ObjectiveSidePanelProps {
+  objective: Objective | null;
+  users: User[];
+  objectives: Objective[];
+  onClose: () => void;
+  onDeleteKeyResult: (objectiveId: string, keyResultId: string) => void;
+  onUpdateKeyResultDetails: (objectiveId: string, krId: string, updates: Partial<KeyResult>) => void;
+  onEditKeyResult: (krId: string) => void;
+  onArchiveKeyResult: (objectiveId: string, keyResultId: string) => void;
+  initialKRId?: string | null;
+  onCheckin: (objectiveId: string, krId: string, value: number, rating: number, report: {tasksDone: string, tasksNext: string, challenges: string}, challengeDifficulty: number, challengeTagIds: string[], status: KRStatus) => void;
+  onAddComment: (objectiveId: string, krId: string, text: string) => void;
+  challengeTags: FeedbackTag[];
+  currentUser: User;
+  isFullscreen: boolean;
+  onToggleFullscreen: () => void;
+  onOpenProgramDesigner: (objectiveId: string, krId: string) => void;
+  // New props for integrations
+  projects: Project[];
+  tasks: Task[];
+  boards: Board[];
+  documents: Document[];
+  onNavigateToBoardFromKR: (boardId: string, objectiveId: string, krId: string) => void;
+  onOpenDocument: (docId: string, options?: { readOnly: boolean }) => void;
+  onSelectTask: (taskId: string) => void;
+  strategies: Strategy[];
+  indices: Index[];
+}
+
+const ObjectiveSidePanel: React.FC<ObjectiveSidePanelProps> = (props) => {
+  const { objective, users, objectives, onClose, initialKRId, isFullscreen, onToggleFullscreen, onEditKeyResult, onOpenProgramDesigner, strategies, indices } = props;
+  const [activeTab, setActiveTab] = useState('objective');
+  
+  useEffect(() => {
+    if (objective?.id) {
+        if (initialKRId) {
+          setActiveTab(initialKRId);
+        } else {
+          setActiveTab('objective');
+        }
+    }
+  }, [initialKRId, objective?.id]);
+
+  if (!objective) return null;
+
+  const owner = users.find(u => u.id === objective.ownerId);
+  const categoryInfo = objective.category ? OBJECTIVE_CATEGORIES[objective.category] : null;
+  const CategoryIcon = categoryInfo ? ICONS[categoryInfo.IconName] : null;
+
+  const parentObjective = objectives.find(o => o.id === objective.parentId);
+  const childObjectives = objectives.filter(o => o.parentId === objective.id);
+  
+  const overallProgress = calculateObjectiveProgress(objective);
+
+  const getStatus = (p: number): { text: string, bg: string, text_color: string } => {
+    if (p < 40) return { text: 'در معرض خطر', bg: 'bg-red-100', text_color: 'text-red-800' };
+    if (p < 70) return { text: 'عقب', bg: 'bg-yellow-100', text_color: 'text-yellow-800' };
+    return { text: 'در مسیر', bg: 'bg-green-100', text_color: 'text-green-800' };
+  };
+
+  const status = getStatus(overallProgress);
+
+  const visibleKeyResults = objective.keyResults.filter(kr => !kr.isArchived);
+  
+  const panelClasses = isFullscreen
+    ? 'h-full w-full flex flex-col'
+    : 'fixed top-12 left-0 h-[calc(100%-48px)] w-full max-w-2xl bg-white shadow-2xl animate-slide-in-left flex flex-col z-40';
+
+
+  return (
+    <div 
+      className={`${panelClasses} bg-white dark:bg-slate-800`}
+      onClick={e => e.stopPropagation()}
+      dir="rtl"
+    >
+      <div className="p-4 border-b flex justify-between items-center bg-gray-50/70 flex-shrink-0">
+        <h2 className="text-lg font-bold text-brand-text truncate max-w-md">{objective.title}</h2>
+        <div className="flex items-center space-x-1 space-x-reverse">
+            <button onClick={onToggleFullscreen} className="p-2 rounded-full text-gray-400 hover:bg-gray-100">
+                {isFullscreen ? <ArrowsPointingInIcon className="w-5 h-5" /> : <ArrowsPointingOutIcon className="w-5 h-5" />}
+            </button>
+            <button onClick={onClose} className="p-1 rounded-full text-gray-400 hover:bg-gray-100">
+                <CloseIcon className="w-5 h-5" />
+            </button>
+        </div>
+      </div>
+
+      <nav className="flex-shrink-0 -mb-px flex space-x-4 space-x-reverse border-b px-4 overflow-x-auto">
+        <TabButton
+            label="جزئیات هدف"
+            isActive={activeTab === 'objective'}
+            onClick={() => setActiveTab('objective')}
+        />
+        {visibleKeyResults.map(kr => (
+            <TabButton
+            key={kr.id}
+            label={kr.title}
+            isActive={activeTab === kr.id}
+            onClick={() => setActiveTab(kr.id)}
+            />
+        ))}
+      </nav>
+
+      <div className="flex-grow p-6 overflow-y-auto">
+        {activeTab === 'objective' && (
+            <div className="space-y-8 animate-fade-in bg-white dark:bg-slate-800">
+                <div>
+                    <h3 className="text-2xl font-bold text-brand-text">{objective.title}</h3>
+                    <p className="mt-2 text-brand-subtext">{objective.description}</p>
+                </div>
+                
+                <div className="border-t pt-6">
+                    <div className="flex justify-between items-center mb-2">
+                    <span className={`text-sm font-semibold px-3 py-1 rounded-full ${status.bg} ${status.text_color}`}>{status.text}</span>
+                    <span className="text-sm font-bold text-brand-text">{overallProgress.toFixed(1)}%</span>
+                    </div>
+                    <ProgressBar progress={overallProgress} showEndPin={true} colorClass="bg-green-500" heightClass="h-3" />
+                </div>
+
+                <ProgressChart objective={objective} />
+                
+                <div className="space-y-3">
+                    <div className="flex items-center">
+                    <UserIcon className="w-5 h-5 text-gray-400 ml-3" />
+                    <span className="w-24 text-sm text-brand-subtext">مالک</span>
+                    <div className="flex items-center">
+                        {owner && <img src={owner.avatarUrl} alt={owner.name} className="w-6 h-6 rounded-full ml-2" />}
+                        <span className="font-medium text-sm">{owner?.name}</span>
+                    </div>
+                    </div>
+                    {categoryInfo && (
+                    <div className="flex items-center">
+                        <Squares2x2Icon className="w-5 h-5 text-gray-400 ml-3" />
+                        <span className="w-24 text-sm text-brand-subtext">دسته‌بندی</span>
+                        <div className="flex items-center">
+                            {CategoryIcon && <CategoryIcon className="w-5 h-5 text-gray-500 ml-2" />}
+                            <span className="font-medium text-sm">{categoryInfo.label}</span>
+                        </div>
+                    </div>
+                    )}
+                    {parentObjective && (
+                    <div className="flex items-center">
+                        <ArrowUpIcon className="w-5 h-5 text-gray-400 ml-3" />
+                        <span className="w-24 text-sm text-brand-subtext">هم‌راستا با</span>
+                        <span className="font-medium text-sm truncate">{parentObjective.title}</span>
+                    </div>
+                    )}
+                    {childObjectives.length > 0 && (
+                    <div className="flex items-start">
+                        <ArrowDownIcon className="w-5 h-5 text-gray-400 ml-3 mt-1" />
+                        <span className="w-24 text-sm text-brand-subtext pt-1">اهداف زیرمجموعه</span>
+                        <div className="flex flex-wrap gap-1">
+                            {childObjectives.map(child => (
+                                <span key={child.id} className="text-xs bg-gray-200 text-gray-800 px-2 py-1 rounded-full">{child.title}</span>
+                            ))}
+                        </div>
+                    </div>
+                    )}
+                </div>
+            </div>
+        )}
+
+        {visibleKeyResults.map(kr => (
+            activeTab === kr.id && <KeyResultDetailTab key={kr.id} kr={kr} objectiveId={objective.id} {...props} />
+        ))}
+      </div>
+    </div>
+  );
+};
+
+export default ObjectiveSidePanel;

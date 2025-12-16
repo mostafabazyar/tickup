@@ -1,0 +1,147 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+// User Model
+model User {
+  id        String   @id @default(cuid())
+  name      String
+  email     String   @unique
+  username  String   @unique
+  password  String
+  role      String   @default("member")
+  avatar    String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations
+  objectives   Objective[]
+  keyResults   KeyResult[]
+  checkIns     CheckIn[]
+  comments     Comment[]
+
+  @@map("users")
+}
+
+// Objective Model - Main goal/objective
+model Objective {
+  id          String   @id @default(cuid())
+  title       String
+  description String?  @db.LongText
+  category    String   // BUSINESS_GROWTH, CUSTOMER_MARKET, etc.
+  color       String   @default("gray") // hex color or color name
+  quarter     String?  // Format: "1404-Q1", "1404-Q2", etc.
+  endDate     DateTime?
+  isArchived  Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // Relations
+  ownerId String
+  owner   User   @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+
+  parentId String?
+  parent   Objective?  @relation("ObjectiveHierarchy", fields: [parentId], references: [id], onDelete: Cascade)
+  children Objective[] @relation("ObjectiveHierarchy")
+
+  keyResults KeyResult[]
+  comments   Comment[]
+
+  @@index([ownerId])
+  @@index([parentId])
+  @@index([quarter])
+  @@map("objectives")
+}
+
+// Key Result Model - Measurable outcomes
+model KeyResult {
+  id           String   @id @default(cuid())
+  title        String
+  description  String?  @db.LongText
+  category     String   // STANDARD, STRETCH, BINARY, ASSIGNMENT
+  type         String   @default("NUMBER") // NUMBER, PERCENTAGE, CURRENCY, BINARY, ASSIGNMENT
+  unit         String?  // %, $, units, etc.
+  
+  // Values
+  startValue   Float    @default(0)
+  currentValue Float    @default(0)
+  targetValue  Float    @default(0)
+  
+  // Timeline
+  startDate    DateTime?
+  endDate      DateTime?
+  
+  // Status & Reporting
+  status       String?  // ON_TRACK, NEEDS_ATTENTION, OFF_TRACK, CHALLENGE
+  reportFrequency String? // DAILY, WEEKLY
+  
+  isArchived   Boolean  @default(false)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  // Relations
+  objectiveId String
+  objective   Objective @relation(fields: [objectiveId], references: [id], onDelete: Cascade)
+
+  ownerId String
+  owner   User   @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+
+  checkIns CheckIn[]
+  comments Comment[]
+
+  @@index([objectiveId])
+  @@index([ownerId])
+  @@map("key_results")
+}
+
+// Check-in Model - Progress updates
+model CheckIn {
+  id              String   @id @default(cuid())
+  value           Float
+  confidence      Int?     // 1-10 scale
+  notes           String?  @db.LongText
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  // Relations
+  keyResultId String
+  keyResult   KeyResult @relation(fields: [keyResultId], references: [id], onDelete: Cascade)
+
+  createdById String
+  createdBy   User   @relation(fields: [createdById], references: [id], onDelete: Cascade)
+
+  @@index([keyResultId])
+  @@index([createdById])
+  @@map("check_ins")
+}
+
+// Comment Model - Discussion threads
+model Comment {
+  id        String   @id @default(cuid())
+  content   String   @db.LongText
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations - can be on either Objective or KeyResult
+  objectiveId String?
+  objective   Objective? @relation(fields: [objectiveId], references: [id], onDelete: Cascade)
+
+  keyResultId String?
+  keyResult   KeyResult? @relation(fields: [keyResultId], references: [id], onDelete: Cascade)
+
+  createdById String
+  createdBy   User   @relation(fields: [createdById], references: [id], onDelete: Cascade)
+
+  @@index([objectiveId])
+  @@index([keyResultId])
+  @@index([createdById])
+  @@map("comments")
+}
