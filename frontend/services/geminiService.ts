@@ -138,8 +138,6 @@ export const generateSmartObjectives = async (
     if (!ai) {
         throw new Error("AI features are not available - API key not configured");
     }
-        return Promise.reject("API key not available.");
-    }
     try {
         const contents = promptTemplate
             .replace('{{goalDescription}}', `"${input.goalDescription}"`)
