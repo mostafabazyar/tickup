@@ -359,7 +359,7 @@ const App: React.FC = () => {
                 sidebarConfig={{ navItems: [] } as any}
             />
             
-            <div className={`flex-1 flex flex-row overflow-hidden md:mr-64`}>
+            <div className={`flex-1 flex flex-row overflow-hidden md:mr-64`} style={{ marginRight: '16rem' }}>
                 <div className="flex-1 flex flex-col min-w-0 transition-all duration-300">
                     <Header
                         pageTitle="اهداف"
